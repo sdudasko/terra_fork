@@ -142,10 +142,12 @@ int terra_lualoadstring(lua_State * L) {
     return 1;
 }
 
+#ifndef TERRA_LUAPOWER_BUILD
 //defines terralib bytecodes
 #include "terralib.h"
 //defines strict.lua bytecodes
 #include "strict.h"
+#endif
 
 int terra_loadandrunbytecodes(lua_State * L, const char * bytecodes, size_t size, const char * name) {
     return luaL_loadbuffer(L, bytecodes, size, name) 
@@ -235,13 +237,22 @@ int terra_initwithoptions(lua_State * L, terra_Options * options) {
     lua_setfield(T->L,LUA_GLOBALSINDEX,"terra"); //create global terra object
     terra_kindsinit(T); //initialize lua mapping from T_Kind to/from string
     setterrahome(T->L); //find the location of support files such as the clang resource directory
+#ifdef TERRA_LUAPOWER_BUILD
+    int err;
+    lua_getglobal(T->L, "require");
+    lua_pushliteral(T->L, "terralib");
+    int err1 = lua_pcall(T->L, 1, 1, 0);
+    if (err1) {
+        return err1;
+    }
+#else
     int err =    terra_loadandrunbytecodes(T->L,luaJIT_BC_strict,luaJIT_BC_strict_SIZE, "strict.lua")
               || terra_loadandrunbytecodes(T->L,luaJIT_BC_terralib,luaJIT_BC_terralib_SIZE, "terralib.lua");
               
     if(err) {
         return err;
     }
-    
+#endif
     terra_cwrapperinit(T);
     
     lua_getfield(T->L,LUA_GLOBALSINDEX,"terra");
