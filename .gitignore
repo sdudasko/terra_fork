@@ -3,3 +3,4 @@ release/include/clang_resource
 release/libterra.so
 release/terra
 terra
+Makefile.inc
