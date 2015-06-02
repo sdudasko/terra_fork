@@ -49,6 +49,7 @@ LUAJIT_VERSION=LuaJIT-2.0.3
 LUAJIT_URL=http://luajit.org/download/$(LUAJIT_VERSION).tar.gz
 LUAJIT_TAR=$(LUAJIT_VERSION).tar.gz
 LUAJIT_DIR=build/$(LUAJIT_VERSION)
+LUAJIT=$(LUAJIT_DIR)/src/luajit
 
 LUAJIT_LIB=build/$(LUAJIT_VERSION)/src/libluajit.a
 
@@ -175,13 +176,13 @@ $(BIN2C):	src/bin2c.c
 
 #rule for packaging lua code into a header file
 build/%.h:	src/%.lua $(PACKAGE_DEPS)
-	LUA_PATH=$(LUAJIT_DIR)/src/?.lua $(LUAJIT_DIR)/src/luajit -bg $< $@
+	LUA_PATH=$(LUAJIT_DIR)/src/?.lua $(LUAJIT) -bg $< $@
 
 #run clang on a C file to extract the header search paths for this architecture
 #genclangpaths.lua find the path arguments and formats them into a C file that is included by the cwrapper
 #to configure the paths	
 build/clangpaths.h:	src/dummy.c $(PACKAGE_DEPS) src/genclangpaths.lua
-	$(LUAJIT_DIR)/src/luajit src/genclangpaths.lua $@ $(CLANG) $(CUDA_INCLUDES)
+	$(LUAJIT) src/genclangpaths.lua $@ $(CLANG) $(CUDA_INCLUDES)
 
 clean:
 	rm -rf build/*.o build/*.d $(GENERATEDHEADERS)
