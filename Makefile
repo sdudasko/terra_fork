@@ -70,7 +70,7 @@ ifeq ($(UNAME), Linux)
 DYNFLAGS = -shared -fPIC
 SO_FLAGS += -Wl,-export-dynamic -Wl,--whole-archive $(LIBRARY) -Wl,--no-whole-archive
 else
-DYNFLAGS = -dynamiclib -single_module -fPIC -install_name "@rpath/libterra.so"
+DYNFLAGS = -dynamiclib -single_module -fPIC -install_name "@rpath/libterra.dylib"
 SO_FLAGS += -Wl,-force_load,$(LIBRARY)
 endif
 
