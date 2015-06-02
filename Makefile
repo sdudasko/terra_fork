@@ -67,10 +67,10 @@ endif
 
 ifeq ($(UNAME), Linux)
 DYNFLAGS = -shared -fPIC
-SO_FLAGS += -Wl,-export-dynamic -Wl,--whole-archive $(LUAJIT_LIB) $(LIBRARY) -Wl,--no-whole-archive
+SO_FLAGS += -Wl,-export-dynamic -Wl,--whole-archive $(LIBRARY) -Wl,--no-whole-archive
 else
 DYNFLAGS = -dynamiclib -single_module -fPIC -install_name "@rpath/libterra.so"
-SO_FLAGS += -Wl,-force_load,$(LUAJIT_LIB),-force_load,$(LIBRARY)
+SO_FLAGS += -Wl,-force_load,$(LIBRARY)
 endif
 
 SO_FLAGS += $(shell $(LLVM_CONFIG) --ldflags) -L$(CLANG_PREFIX)/lib
