@@ -1,0 +1,3 @@
+-include Makefile.luapower
+LLVM_CONFIG = ../../llvm/llvm-linux/bin/llvm-config
+SO_FLAGS += -L../../../bin/linux64

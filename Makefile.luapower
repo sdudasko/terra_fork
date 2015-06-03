@@ -1,8 +1,6 @@
 LUAJIT_DIR = ../../luajit/src
 LUAJIT = ../../../luajit
-CLANG = clang
 FLAGS += -DTERRA_LUAPOWER_BUILD
-SO_FLAGS += -lluajit
 EMBEDDEDLUA =
 LUAHEADERS =
 PACKAGE_DEPS =
