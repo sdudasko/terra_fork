@@ -711,7 +711,7 @@ int include_c(lua_State * L) {
     int N = lua_objlen(L, -1);
     std::vector<const char *> args;
 
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(__MINGW32__)
     args.push_back("-fms-extensions");
     args.push_back("-fms-compatibility");
 #define __stringify(x) #x
