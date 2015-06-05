@@ -3,7 +3,7 @@
 #include "terrastate.h"
 #include "tcompilerstate.h"
 
-#if !defined(__arm__)
+#if !defined(__arm__) && !defined(__MINGW32__)
 
 #ifndef _WIN32
 #include <execinfo.h>
@@ -13,7 +13,9 @@
 #include <ucontext.h>
 #include <unistd.h>
 #else
+#ifndef __MINGW32__
 #define NOMINMAX
+#endif
 #include <Windows.h>
 #include <imagehlp.h>
 #endif

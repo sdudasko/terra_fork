@@ -19,7 +19,9 @@
 #include <libgen.h>
 #include <unistd.h>
 #else
+#ifndef __MINGW32__
 #define NOMINMAX
+#endif
 #include <Windows.h>
 #include <Shlwapi.h>
 #endif
@@ -416,3 +418,13 @@ void terra_llvmshutdown() {
     llvm::llvm_shutdown();
 }
 
+#ifdef TERRA_LUAPOWER_BUILD
+int luaopen_terra(lua_State *L) {
+    int ret = terra_init(L);
+    if (ret) {
+        return ret;
+    }
+    lua_getfield(L, LUA_GLOBALSINDEX, "terra");
+    return 1;
+} 
+#endif
