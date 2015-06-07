@@ -4,3 +4,4 @@ release/libterra.so
 release/terra
 terra
 Makefile.inc
+src/*.o

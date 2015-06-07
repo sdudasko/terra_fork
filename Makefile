@@ -41,8 +41,8 @@ UNAME := $(shell uname)
 
 AR = ar
 LD = ld
-FLAGS = -Wall -g -fPIC
-LFLAGS = -g
+FLAGS = -Wall -fPIC
+LFLAGS =
 
 #luajit will be downloaded automatically (it's much smaller than llvm)
 LUAJIT_VERSION=LuaJIT-2.0.3
@@ -55,7 +55,7 @@ LUAJIT_LIB=build/$(LUAJIT_VERSION)/src/libluajit.a
 
 FLAGS += -I build -I release/include -I $(LUAJIT_DIR)/src -I $(shell $(LLVM_CONFIG) --includedir) -I $(CLANG_PREFIX)/include
 
-FLAGS += -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -O0 -fno-rtti -fno-common -Woverloaded-virtual -Wcast-qual -fvisibility-inlines-hidden
+FLAGS += -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -fno-rtti -fno-common -Woverloaded-virtual -Wcast-qual -fvisibility-inlines-hidden
 
 LLVM_VERSION_NUM=$(shell $(LLVM_CONFIG) --version | sed -e s/svn//)
 LLVM_VERSION=$(shell echo $(LLVM_VERSION_NUM) | sed -E 's/^([0-9]+)\.([0-9]+).*/\1\2/')
@@ -70,7 +70,7 @@ ifeq ($(UNAME), Linux)
 DYNFLAGS = -shared -fPIC
 SO_FLAGS += -Wl,-export-dynamic -Wl,--whole-archive $(LIBRARY) -Wl,--no-whole-archive
 else
-DYNFLAGS = -dynamiclib -single_module -fPIC -install_name "@rpath/libterra.dylib"
+DYNFLAGS = -dynamiclib -single_module -fPIC -install_name "@rpath/libterra.so"
 SO_FLAGS += -Wl,-force_load,$(LIBRARY)
 endif
 
