@@ -1,4 +1,4 @@
-local S = require "std"
+local S = require "terra_std"
 
 c = global(int,0)
 

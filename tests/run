@@ -1,4 +1,5 @@
-#!../terra
+#!/usr/bin/env ../../../../luajit -lterra
+local testfile=...
 local ffi = require("ffi")
 
 local lscmd
@@ -11,10 +12,11 @@ end
 local function getcommand(file)
     local prefix = terralib and terralib.terrahome and 
                    terralib.terrahome .."/terra" or "../terra"
+    prefix = '../../../../luajit -e\'do end\' -lterra -l'
     if ffi.os == "Windows" then
         prefix = "cmd /c " .. prefix:gsub("/","\\\\")
     end
-    return prefix
+    return prefix .. file:gsub('%.t$', '')
 end
 
 local passed = {}
@@ -30,9 +32,9 @@ for line in io.popen(lscmd):lines() do
         io.close()
     end
     local file = line:match("^([^/]*%.t)$") or line:match("^(fails/[^/]*%.t)$")
-    if file then
+    if file and (not testfile or file == testfile) then
         print(file .. ":")
-        local execstring = getcommand(file) .. " " .. file
+        local execstring = getcommand(file)
         if os.execute(execstring) == 0 then
             table.insert(passed,file)
         else

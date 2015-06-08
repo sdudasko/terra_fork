@@ -1,4 +1,4 @@
-local Parse = require "parsing"
+local Parse = require "terra_parsing"
 
 local Tree = {}
 Tree.__index = Tree

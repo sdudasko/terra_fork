@@ -2790,7 +2790,7 @@ static int terra_pointertolightuserdata(lua_State * L) {
     lua_pushlightuserdata(L, *cdata);
     return 1;
 }
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(__MINGW32__)
 #define ISFINITE(v) _finite(v)
 #else
 #define ISFINITE(v) std::isfinite(v)

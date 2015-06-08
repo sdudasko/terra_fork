@@ -2,7 +2,7 @@
 
 #include "treadnumber.h"
 
-#ifdef _WIN32
+#if defined(_WIN32) || defined(TERRA_LUAPOWER_BUILD)
 #include "lj_strscan.c"
 #include "lj_char.c"
 #else
