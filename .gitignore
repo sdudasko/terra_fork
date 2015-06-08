@@ -5,3 +5,4 @@ release/terra
 terra
 Makefile.inc
 src/*.o
+tests/*

@@ -1,4 +1,0 @@
--include Makefile.luapower
-CLANG = clang
-LLVM_CONFIG = ../../llvm/llvm-osx/bin/llvm-config
-SO_FLAGS += -lluajit -L../../../bin/osx64

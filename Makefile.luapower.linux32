@@ -1,6 +1,0 @@
--include Makefile.luapower
-LLVM_CONFIG = ../../llvm/install.linux32/bin/llvm-config
-DYNFLAGS += -s -O2 -static-libgcc -static-libstdc++ -Wl,--version-script=../terra.version
-TERRA_CXX = g++
-TERRA_CC = gcc
-TERRA_LINK = g++
