@@ -20,6 +20,9 @@
 #include <imagehlp.h>
 #endif
 
+#if defined(__GNUC__) /* wrap msvc intrinsics onto gcc builtins */
+#define _ReturnAddress()        __builtin_return_address(0)
+#endif
 
 using namespace llvm;
 
