@@ -41,21 +41,20 @@ UNAME := $(shell uname)
 
 AR = ar
 LD = ld
-FLAGS = -Wall -fPIC
-LFLAGS =
+FLAGS = -Wall -g -fPIC
+LFLAGS = -g
 
 #luajit will be downloaded automatically (it's much smaller than llvm)
 LUAJIT_VERSION=LuaJIT-2.0.3
 LUAJIT_URL=http://luajit.org/download/$(LUAJIT_VERSION).tar.gz
 LUAJIT_TAR=$(LUAJIT_VERSION).tar.gz
 LUAJIT_DIR=build/$(LUAJIT_VERSION)
-LUAJIT=$(LUAJIT_DIR)/src/luajit
 
 LUAJIT_LIB=build/$(LUAJIT_VERSION)/src/libluajit.a
 
 FLAGS += -I build -I release/include -I $(LUAJIT_DIR)/src -I $(shell $(LLVM_CONFIG) --includedir) -I $(CLANG_PREFIX)/include
 
-FLAGS += -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -fno-rtti -fno-common -Woverloaded-virtual -Wcast-qual -fvisibility-inlines-hidden
+FLAGS += -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -O0 -fno-rtti -fno-common -Woverloaded-virtual -Wcast-qual -fvisibility-inlines-hidden
 
 LLVM_VERSION_NUM=$(shell $(LLVM_CONFIG) --version | sed -e s/svn//)
 LLVM_VERSION=$(shell echo $(LLVM_VERSION_NUM) | sed -E 's/^([0-9]+)\.([0-9]+).*/\1\2/')
@@ -68,10 +67,10 @@ endif
 
 ifeq ($(UNAME), Linux)
 DYNFLAGS = -shared -fPIC
-SO_FLAGS += -Wl,-export-dynamic -Wl,--whole-archive $(LIBRARY) -Wl,--no-whole-archive
+SO_FLAGS += -Wl,-export-dynamic -Wl,--whole-archive $(LUAJIT_LIB) $(LIBRARY) -Wl,--no-whole-archive
 else
 DYNFLAGS = -dynamiclib -single_module -fPIC -install_name "@rpath/libterra.so"
-SO_FLAGS += -Wl,-force_load,$(LIBRARY)
+SO_FLAGS += -Wl,-force_load,$(LUAJIT_LIB),-force_load,$(LIBRARY)
 endif
 
 SO_FLAGS += $(shell $(LLVM_CONFIG) --ldflags) -L$(CLANG_PREFIX)/lib
@@ -176,13 +175,13 @@ $(BIN2C):	src/bin2c.c
 
 #rule for packaging lua code into a header file
 build/%.h:	src/%.lua $(PACKAGE_DEPS)
-	LUA_PATH=$(LUAJIT_DIR)/src/?.lua $(LUAJIT) -bg $< $@
+	LUA_PATH=$(LUAJIT_DIR)/src/?.lua $(LUAJIT_DIR)/src/luajit -bg $< $@
 
 #run clang on a C file to extract the header search paths for this architecture
 #genclangpaths.lua find the path arguments and formats them into a C file that is included by the cwrapper
 #to configure the paths	
 build/clangpaths.h:	src/dummy.c $(PACKAGE_DEPS) src/genclangpaths.lua
-	$(LUAJIT) src/genclangpaths.lua $@ $(CLANG) $(CUDA_INCLUDES)
+	$(LUAJIT_DIR)/src/luajit src/genclangpaths.lua $@ $(CLANG) $(CUDA_INCLUDES)
 
 clean:
 	rm -rf build/*.o build/*.d $(GENERATEDHEADERS)
