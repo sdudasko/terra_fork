@@ -3,10 +3,18 @@
 #include <stdio.h>
 
 #include "tllvmutil.h"
-#include "llvm/Target/TargetLibraryInfo.h"
 
+#if LLVM_VERSION <= 36
+#include "llvm/Target/TargetLibraryInfo.h"
+#else
+#include "llvm/Analysis/TargetLibraryInfo.h"
+#endif
 #include "llvm/MC/MCAsmInfo.h"
+#if LLVM_VERSION < 39
 #include "llvm/MC/MCDisassembler.h"
+#else
+#include "llvm/MC/MCDisassembler/MCDisassembler.h"
+#endif
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstPrinter.h"
 #include "llvm/MC/MCInstrInfo.h"
@@ -15,8 +23,9 @@
 #if LLVM_VERSION >= 35
 #include "llvm/MC/MCContext.h"
 #endif
+#if LLVM_VERSION < 50
 #include "llvm/Support/MemoryObject.h"
-
+#endif
 #ifndef _WIN32
 #include <sys/wait.h>
 #endif
@@ -24,25 +33,31 @@
 using namespace llvm;
 
 void llvmutil_addtargetspecificpasses(PassManagerBase * fpm, TargetMachine * TM) {
+    assert(TM && fpm);
+#if LLVM_VERSION >= 37
+    TargetLibraryInfoImpl TLII(TM->getTargetTriple());
+    fpm->add(new TargetLibraryInfoWrapperPass(TLII));
+#else
     TargetLibraryInfo * TLI = new TargetLibraryInfo(Triple(TM->getTargetTriple()));
-#if defined(TERRA_ENABLE_CUDA) && defined(__APPLE__)
-    //currently there isn't a seperate pathway for optimization when code will be running on CUDA
-    //so we need to avoid generating functions that don't exist there like memset_pattern16 for all code
-    //we only do this if cuda is enabled on OSX where the problem occurs to avoid slowing down other code
-    TLI->setUnavailable(LibFunc::memset_pattern16);
-#endif
     fpm->add(TLI);
+#endif
+#if LLVM_VERSION <= 35
     DataLayout * TD = new DataLayout(*TM->getDataLayout());
+#endif
 #if LLVM_VERSION <= 34
     fpm->add(TD);
-#else
+#elif LLVM_VERSION == 35
     fpm->add(new DataLayoutPass(*TD));
+#elif LLVM_VERSION == 36
+    fpm->add(new DataLayoutPass());
+#else
+    fpm->add(createTargetTransformInfoWrapperPass(TM->getTargetIRAnalysis()));
 #endif
     
 #if LLVM_VERSION == 32
     fpm->add(new TargetTransformInfo(TM->getScalarTargetTransformInfo(),
                                      TM->getVectorTargetTransformInfo()));
-#elif LLVM_VERSION >= 33
+#elif LLVM_VERSION >= 33 && LLVM_VERSION <= 36
     TM->addAnalysisPasses(*fpm);
 #endif
 }
@@ -72,6 +87,7 @@ void llvmutil_addoptimizationpasses(PassManagerBase * fpm) {
     PMB.populateModulePassManager(W);
 }
 
+#if LLVM_VERSION < 50
 struct SimpleMemoryObject : public MemoryObject {
   uint64_t getBase() const { return 0; }
   uint64_t getExtent() const { return ~0ULL; }
@@ -80,6 +96,7 @@ struct SimpleMemoryObject : public MemoryObject {
     return 0;
   }
 };
+#endif
 
 void llvmutil_disassemblefunction(void * data, size_t numBytes, size_t numInst) {
     InitializeNativeTargetDisassembler();
@@ -118,22 +135,43 @@ void llvmutil_disassemblefunction(void * data, size_t numBytes, size_t numInst) 
     assert(DisAsm && "Unable to create disassembler!");
 
     int AsmPrinterVariant = MAI->getAssemblerDialect();
-    MCInstPrinter *IP = TheTarget->createMCInstPrinter(AsmPrinterVariant,
-                                                     *MAI, *MII, *MRI, *STI);
+    MCInstPrinter *IP = TheTarget->createMCInstPrinter(
+                                                      #if LLVM_VERSION >= 37
+                                                      Triple(TripleName),
+                                                      #endif
+                                                      AsmPrinterVariant,
+                                                     *MAI, *MII, *MRI
+                                                     #if LLVM_VERSION <= 36
+                                                     , *STI
+                                                     #endif
+                                                     );
     assert(IP && "Unable to create instruction printer!");
 
+    #if LLVM_VERSION < 36
     SimpleMemoryObject SMO;
+    #else
+    ArrayRef<uint8_t> Bytes((uint8_t*)data,numBytes);
+    #endif
+    
     uint64_t addr = (uint64_t)data;
     uint64_t Size;
     fflush(stdout);
     raw_fd_ostream Out(fileno(stdout), false);
     for(size_t i = 0, b = 0; b < numBytes || i < numInst; i++, b += Size) {
         MCInst Inst;
+        #if LLVM_VERSION >= 36
+        MCDisassembler::DecodeStatus S = DisAsm->getInstruction(Inst, Size, Bytes.slice(b),addr + b, nulls(), Out);
+        #else
         MCDisassembler::DecodeStatus S = DisAsm->getInstruction(Inst, Size, SMO,addr + b, nulls(), Out);
+        #endif
         if(MCDisassembler::Fail == S || MCDisassembler::SoftFail == S)
             break;
         Out << (void*) ((uintptr_t)data + b) << "(+" << b << ")" << ":\t";
-        IP->printInst(&Inst,Out,"");
+        IP->printInst(&Inst,Out,""
+        #if LLVM_VERSION >= 37
+        , *STI
+        #endif
+        );
         Out << "\n";
     }
     Out.flush();
@@ -141,22 +179,24 @@ void llvmutil_disassemblefunction(void * data, size_t numBytes, size_t numInst) 
 }
 
 //adapted from LLVM's C interface "LLVMTargetMachineEmitToFile"
-bool llvmutil_emitobjfile(Module * Mod, TargetMachine * TM, raw_ostream & dest, std::string * ErrorMessage) {
+bool llvmutil_emitobjfile(Module * Mod, TargetMachine * TM, bool outputobjectfile, emitobjfile_t & dest) {
 
-    PassManager pass;
-
+    PassManagerT pass;
     llvmutil_addtargetspecificpasses(&pass, TM);
     
-    TargetMachine::CodeGenFileType ft = TargetMachine::CGFT_ObjectFile;
+    TargetMachine::CodeGenFileType ft = outputobjectfile? TargetMachine::CGFT_ObjectFile : TargetMachine::CGFT_AssemblyFile;
     
+    #if LLVM_VERSION <= 36
     formatted_raw_ostream destf(dest);
-    
+    #else
+    emitobjfile_t & destf = dest;
+    #endif
     if (TM->addPassesToEmitFile(pass, destf, ft)) {
-        *ErrorMessage = "addPassesToEmitFile";
         return true;
     }
 
     pass.run(*Mod);
+    
     destf.flush();
     dest.flush();
 
@@ -171,24 +211,28 @@ struct CopyConnectedComponent : public ValueMaterializer {
     llvmutil_Property copyGlobal;
     void * data;
     ValueToValueMapTy & VMap;
-    DIBuilder * DI;
-    DICompileUnit NCU;
+    
     CopyConnectedComponent(Module * dest_, Module * src_, llvmutil_Property copyGlobal_, void * data_, ValueToValueMapTy & VMap_)
-    : dest(dest_), src(src_), copyGlobal(copyGlobal_), data(data_), VMap(VMap_), DI(NULL) {
-        if(NamedMDNode * NMD = src->getNamedMetadata("llvm.module.flags")) {
-            NamedMDNode * New = dest->getOrInsertNamedMetadata(NMD->getName());
-            for (unsigned i = 0; i < NMD->getNumOperands(); i++) {
-                New->addOperand(MapValue(NMD->getOperand(i), VMap));
-            }
+    : dest(dest_), src(src_), copyGlobal(copyGlobal_), data(data_), VMap(VMap_) {}
+    bool needsFreshlyNamedConstant(GlobalVariable * GV, GlobalVariable * newGV) {
+        if(GV->isConstant() && GV->hasPrivateLinkage() &&
+#if LLVM_VERSION < 39
+           GV->hasUnnamedAddr()
+#else
+           GV->hasAtLeastLocalUnnamedAddr()
+#endif
+           ) { //this is a candidate constant
+            return !newGV->isConstant() || newGV->getInitializer() != GV->getInitializer(); //it is not equal to its target
         }
-
-        if(NamedMDNode * CUN = src->getNamedMetadata("llvm.dbg.cu")) {
-            DI = new DIBuilder(*dest);
-            DICompileUnit CU(CUN->getOperand(0));
-            NCU = DI->createCompileUnit(CU.getLanguage(), CU.getFilename(), CU.getDirectory(), CU.getProducer(), CU.isOptimized(), CU.getFlags(), CU.getRunTimeVersion());
-        }
+        return false;
     }
+    #if LLVM_VERSION == 38
+    virtual Value * materializeDeclFor(Value * V) {
+    #elif LLVM_VERSION < 38
     virtual Value * materializeValueFor(Value * V) {
+    #else
+    virtual Value * materialize(Value * V) {
+    #endif
         if(Function * fn = dyn_cast<Function>(V)) {
             assert(fn->getParent() == src);
             Function * newfn = dest->getFunction(fn->getName());
@@ -199,21 +243,23 @@ struct CopyConnectedComponent : public ValueMaterializer {
             if(!fn->isDeclaration() && newfn->isDeclaration() && copyGlobal(fn,data)) {
                 for(Function::arg_iterator II = newfn->arg_begin(), I = fn->arg_begin(), E = fn->arg_end(); I != E; ++I, ++II) {
                     II->setName(I->getName());
-                    VMap[I] = II;
+                    VMap[&*I] = &*II;
                 }
                 VMap[fn] = newfn;
                 SmallVector<ReturnInst*,8> Returns;
                 CloneFunctionInto(newfn, fn, VMap, true, Returns, "", NULL, NULL, this);
+            }else{
+                newfn->setLinkage(GlobalValue::ExternalLinkage);
             }
             return newfn;
         } else if(GlobalVariable * GV = dyn_cast<GlobalVariable>(V)) {
             GlobalVariable * newGV = dest->getGlobalVariable(GV->getName(),true);
-            if(!newGV) {
+            if(!newGV || needsFreshlyNamedConstant(GV,newGV)) {
                 newGV = new GlobalVariable(*dest,GV->getType()->getElementType(),GV->isConstant(),GV->getLinkage(),NULL,GV->getName(),NULL,GlobalVariable::NotThreadLocal,GV->getType()->getAddressSpace());
                 newGV->copyAttributesFrom(GV);
                 if(!GV->isDeclaration()) {
                     if(!copyGlobal(GV,data)) {
-                        newGV->setExternallyInitialized(true);
+                        newGV->setLinkage(GlobalValue::ExternalLinkage);
                     } else if(GV->hasInitializer()) {
                         Value * C = MapValue(GV->getInitializer(),VMap,RF_None,NULL,this);
                         newGV->setInitializer(cast<Constant>(C));
@@ -221,9 +267,43 @@ struct CopyConnectedComponent : public ValueMaterializer {
                 }
             }
             return newGV;
-        } else if(MDNode * MD = dyn_cast<MDNode>(V)) {
+        } else return materializeValueForMetadata(V);
+    }
+#ifdef DEBUG_INFO_WORKING
+    DIBuilder * DI;
+    DICompileUnit NCU;
+    void CopyDebugMetadata() {
+        DI = NULL;
+        if(NamedMDNode * NMD = src->getNamedMetadata("llvm.module.flags")) {
+            NamedMDNode * New = dest->getOrInsertNamedMetadata(NMD->getName());
+            for (unsigned i = 0; i < NMD->getNumOperands(); i++) {
+            #if LLVM_VERSION <= 35
+                New->addOperand(MapValue(NMD->getOperand(i), VMap));
+            #else
+                New->addOperand(MapMetadata(NMD->getOperand(i), VMap));
+            #endif
+            }
+        }
+        if(NamedMDNode * CUN = src->getNamedMetadata("llvm.dbg.cu")) {
+            DI = new DIBuilder(*dest);
+            
+            DICompileUnit CU(CUN->getOperand(0));
+            NCU = DI->createCompileUnit(CU.getLanguage(), CU.getFilename(), CU.getDirectory(), CU.getProducer(), CU.isOptimized(), CU.getFlags(), CU.getRunTimeVersion());
+        }
+    }
+    Value * materializeValueForMetadata(Value * V) {
+    #if LLVM_VERSION <= 35
+        if(MDNode * MD = dyn_cast<MDNode>(V)) {
             DISubprogram SP(MD);
             if(DI != NULL && SP.isSubprogram()) {
+    #else
+        if(auto * MDV = dyn_cast<MetadataAsValue>(V)) {
+            Metadata * MDraw = MDV->getMetadata();
+            MDNode * MD = dyn_cast<MDNode>(MDraw);
+            DISubprogram SP(MD);
+            if(MD != NULL && DI != NULL && SP.isSubprogram()) {
+    #endif
+           
                 
                 if(Function * OF = SP.getFunction()) {
                     Function * F = cast<Function>(MapValue(OF,VMap,RF_None,NULL,this));
@@ -233,7 +313,11 @@ struct CopyConnectedComponent : public ValueMaterializer {
                                                       SP.isLocalToUnit(), SP.isDefinition(),
                                                       SP.getScopeLineNumber(),SP.getFlags(),SP.isOptimized(),
                                                       F);
+                    #if LLVM_VERSION <= 35
                     return NSP;
+                    #else
+                    return MetadataAsValue::get(dest->getContext(),NSP);
+                    #endif
                 }
                 /* fallthrough */
             }
@@ -247,110 +331,59 @@ struct CopyConnectedComponent : public ValueMaterializer {
             delete DI;
         }
     }
+#else
+    void CopyDebugMetadata() {}
+    Value * materializeValueForMetadata(Value * V) { return NULL; }
+    void finalize() {}
+#endif
+    
 };
 
 llvm::Module * llvmutil_extractmodulewithproperties(llvm::StringRef DestName, llvm::Module * Src, llvm::GlobalValue ** gvs, size_t N, llvmutil_Property copyGlobal, void * data, llvm::ValueToValueMapTy & VMap) {
     Module * Dest = new Module(DestName,Src->getContext());
     Dest->setTargetTriple(Src->getTargetTriple());
     CopyConnectedComponent cp(Dest,Src,copyGlobal,data,VMap);
+    cp.CopyDebugMetadata();
     for(size_t i = 0; i < N; i++)
         MapValue(gvs[i],VMap,RF_None,NULL,&cp);
     cp.finalize();
     return Dest;
 }
-static bool AlwaysCopy(GlobalValue * G, void *) { return true; }
-#endif
-
-
-
-Module * llvmutil_extractmodule(Module * OrigMod, TargetMachine * TM, std::vector<llvm::GlobalValue*> * livevalues, std::vector<std::string> * symbolnames, bool internalizeandoptimize) {
-        assert(symbolnames == NULL || livevalues->size() == symbolnames->size());
-        ValueToValueMapTy VMap;
-        #if LLVM_VERSION >= 34
-        Module * M = llvmutil_extractmodulewithproperties(OrigMod->getModuleIdentifier(), OrigMod, (llvm::GlobalValue **)&(*livevalues)[0], livevalues->size(), AlwaysCopy, NULL, VMap);
-        #else
-        Module * M = CloneModule(OrigMod, VMap);
-        internalizeandoptimize = true; //we need to do this regardless of the input because it is the only way we can extract just the needed functions from the module
-        #endif
-
-        //rename values to symbolsnames
-        std::vector<const char *> names;
-        for(size_t i = 0; i < livevalues->size(); i++) {
-            GlobalValue * fn = cast<GlobalValue>(VMap[(*livevalues)[i]]);
-            const std::string & name = (*symbolnames)[i];
-            GlobalValue * gv = M->getNamedValue(name);
-            if(gv) { //if there is already a symbol with this name, rename it
-                gv->setName(Twine((*symbolnames)[i],"_renamed"));
-            }
-            fn->setName(name); //and set our function to this name
-            assert(fn->getName() == name);
-            names.push_back(name.c_str()); //internalize pass has weird interface, so we need to copy the names here
-        }
-        
-        if (!internalizeandoptimize)
-            return M;
-    
-        //at this point we run optimizations on the module
-        //first internalize all functions not mentioned in "names" using an internalize pass and then perform 
-        //standard optimizations
-        PassManager MPM;
-        llvmutil_addtargetspecificpasses(&MPM, TM);
-    
-        MPM.add(createVerifierPass()); //make sure we haven't messed stuff up yet
-        MPM.add(createInternalizePass(names));
-        MPM.add(createGlobalDCEPass()); //run this early since anything not in the table of exported functions is still in this module
-                                         //this will remove dead functions
-        
-        PassManagerBuilder PMB;
-        PMB.OptLevel = 3;
-        PMB.SizeLevel = 0;
-    
-#if LLVM_VERSION >= 35
-        PMB.LoopVectorize = true;
-        PMB.SLPVectorize = true;
-#endif
-
-        PMB.populateModulePassManager(MPM);
-    
-        MPM.run(*M);
-    
-
-        return M;
+void llvmutil_copyfrommodule(llvm::Module * Dest, llvm::Module * Src, llvm::GlobalValue ** gvs, size_t N, llvmutil_Property copyGlobal, void * data) {
+    llvm::ValueToValueMapTy VMap;
+    CopyConnectedComponent cp(Dest,Src,copyGlobal,data,VMap);
+    for(size_t i = 0; i < N; i++)
+        MapValue(gvs[i],VMap,RF_None,NULL,&cp);
 }
+#endif
 
-bool llvmutil_linkmodule(Module * dst, Module * src, TargetMachine * TM, PassManager ** optManager, std::string * errmsg) {
-    //cleanup after clang.
-    //in some cases clang will mark stuff AvailableExternally (e.g. atoi on linux)
-    //the linker will then delete it because it is not used.
-    //switching it to WeakODR means that the linker will keep it even if it is not used
-    for(llvm::Module::iterator it = src->begin(), end = src->end();
-        it != end;
-        ++it) {
-        llvm::Function * fn = it;
-        if(fn->hasAvailableExternallyLinkage()) {
-            fn->setLinkage(llvm::GlobalValue::WeakODRLinkage);
-        }
-    #if LLVM_VERSION >= 35
-        if(fn->hasDLLImportStorageClass()) //clear dll import linkage because it messes up the jit on window
-            fn->setDLLStorageClass(llvm::GlobalValue::DefaultStorageClass);
-    #else
-        if(fn->hasDLLImportLinkage()) //clear dll import linkage because it messes up the jit on window
-            fn->setLinkage(llvm::GlobalValue::ExternalLinkage);
-        
-    #endif
-    }
-    src->setTargetTriple(dst->getTargetTriple()); //suppress warning that occur due to unmatched os versions
-    if(optManager) {
-        if(!*optManager) {
-            *optManager = new PassManager();
-            llvmutil_addtargetspecificpasses(*optManager, TM);
-            (*optManager)->add(createFunctionInliningPass());
-            llvmutil_addoptimizationpasses(*optManager);
-        }
-        (*optManager)->run(*src);
-    }
+
+
+void llvmutil_optimizemodule(Module * M, TargetMachine * TM) {
+    PassManagerT MPM;
+    llvmutil_addtargetspecificpasses(&MPM, TM);
+
+    MPM.add(createVerifierPass()); //make sure we haven't messed stuff up yet
+    MPM.add(createGlobalDCEPass()); //run this early since anything not in the table of exported functions is still in this module
+                                     //this will remove dead functions
     
-    return llvm::Linker::LinkModules(dst, src, 0, errmsg);
+    PassManagerBuilder PMB;
+    PMB.OptLevel = 3;
+    PMB.SizeLevel = 0;
+#if LLVM_VERSION < 50
+    PMB.Inliner = createFunctionInliningPass(PMB.OptLevel, 0);
+#else
+    PMB.Inliner = createFunctionInliningPass(PMB.OptLevel, 0, false);
+#endif
+
+#if LLVM_VERSION >= 35
+    PMB.LoopVectorize = true;
+    PMB.SLPVectorize = true;
+#endif
+
+    PMB.populateModulePassManager(MPM);
+
+    MPM.run(*M);
 }
 
 #if LLVM_VERSION >= 34
@@ -370,7 +403,7 @@ error_code llvmutil_createtemporaryfile(const Twine &Prefix, StringRef Suffix, S
 int llvmutil_executeandwait(LLVM_PATH_TYPE program, const char ** args, std::string * err) {
 #if LLVM_VERSION >= 34
     bool executionFailed = false;
-    llvm::sys::ProcessInfo Info = llvm::sys::ExecuteNoWait(program,args,0,0,0,err,&executionFailed);
+    llvm::sys::ProcessInfo Info = llvm::sys::ExecuteNoWait(program,args,nullptr,{},0,err,&executionFailed);
     if(executionFailed)
         return -1;
     #ifndef _WIN32

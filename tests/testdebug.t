@@ -1,17 +1,17 @@
-if not terralib.traceback then return end
+if not terralib.traceback or terralib.llvmversion ~= 35 then return end
 --this test require debug on, if it is not on, relaunch with it on
 if 0 == terralib.isdebug then
-  assert(0 == os.execute(terralib.terrahome.."/terra -g testdebug.t"))
+  assert(0 == os.execute(terralib.terrahome.."/bin/terra -g testdebug.t"))
   return
 end
 C = terralib.includec("stdio.h")
-print(terralib.verbose)
+
 terra foo(a : int, b : int)
   var c = a + b
   return c * 2
 end
 
-local ptr = terralib.cast(rawstring,foo:getdefinitions()[1]:getpointer())
+local ptr = terralib.cast(rawstring,foo:getpointer())
 
 terra findptr(a : &opaque)
   var si : terralib.SymbolInfo
@@ -22,7 +22,6 @@ terra findptr(a : &opaque)
   C.printf("line = %.*s:%d\n",li.namelength,li.name,[int](li.linenum))
   return li.linenum
 end
---foo:disas()
 assert(11 == findptr(ptr+6))
 assert(10 == findptr(ptr+4))
 local ra = terralib.intrinsic("llvm.returnaddress", int32 -> &opaque )

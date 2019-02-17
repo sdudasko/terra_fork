@@ -20,7 +20,7 @@
 #include "terra.h"
 
 static void doerror(lua_State * L) {
-    printf("%s\n",luaL_checkstring(L,-1));
+    fprintf(stderr,"%s\n",luaL_checkstring(L,-1));
     lua_close(L);
     terra_llvmshutdown();
     exit(1);
@@ -63,16 +63,21 @@ void setupcrashsignal(lua_State * L) {
     const void * tb = lua_topointer(L,-1);
     if(!tb)
         return; //debug not supported
-    terratraceback = *(void(**)(void*))tb;
+    terratraceback = *(void(* const *)(void*))tb;
 	registerhandler();
     lua_pop(L,2);
+}
+
+static int luapanic (lua_State * L) { //so that we can set a debugger breakpoint and catch the error
+    printf("PANIC: unprotected error in call to Lua API (%s)\n",lua_tostring(L,-1));
+    exit(1);
 }
 
 int main(int argc, char ** argv) {
     progname = argv[0];
     lua_State * L = luaL_newstate();
     luaL_openlibs(L);
-    
+    lua_atpanic(L,luapanic);
     terra_Options options;
     memset(&options, 0, sizeof(terra_Options));
     
@@ -86,6 +91,12 @@ int main(int argc, char ** argv) {
     
     setupcrashsignal(L);
     
+    if(options.cmd_line_chunk != NULL) {
+      if(terra_dostring(L,options.cmd_line_chunk))
+        doerror(L);
+      free(options.cmd_line_chunk);
+    }
+
     if(scriptidx < argc) {
       int narg = getargs(L, argv, scriptidx);  
       lua_setglobal(L, "arg");
@@ -99,7 +110,7 @@ int main(int argc, char ** argv) {
         doerror(L);
     }
     
-    if(isatty(0) && (interactive || scriptidx == argc)) {
+    if(isatty(0) && (interactive || (scriptidx == argc && !options.cmd_line_chunk))) {
         progname = NULL;
         dotty(L);
     }
@@ -119,6 +130,7 @@ void usage() {
            "    -h print this help message\n"
            "    -i enter the REPL after processing source files\n"
            "    -m use LLVM's MCJIT\n"
+           "    -e 'chunk' : execute command-line 'chunk' of code\n"
            "    -  Execute stdin instead of script and stop parsing options\n");
 }
 
@@ -130,11 +142,12 @@ void parse_args(lua_State * L, int  argc, char ** argv, terra_Options * options,
         { "debugsymbols",   0,     NULL,           'g' },
         { "interactive",     0,     NULL,     'i' },
         { "mcjit", 0, NULL, 'm' },
+        { "execute", required_argument, NULL, 'e' },
         { NULL,        0,     NULL,            0 }
     };
     /*  Parse commandline options  */
     opterr = 0;
-    while ((ch = getopt_long(argc, argv, "+hvgimp:", longopts, NULL)) != -1) {
+    while ((ch = getopt_long(argc, argv, "+hvgime:p:", longopts, NULL)) != -1) {
         switch (ch) {
             case 'v':
                 options->verbose++;
@@ -147,6 +160,10 @@ void parse_args(lua_State * L, int  argc, char ** argv, terra_Options * options,
                 break;
             case 'm':
                 options->usemcjit = 1;
+                break;
+            case 'e':
+                options->cmd_line_chunk = (char*)malloc(strlen(optarg) + 1);
+                strcpy(options->cmd_line_chunk, optarg);
                 break;
             case ':':
             case 'h':
@@ -290,7 +307,6 @@ static int traceback (lua_State *L) {
   return 1;
 }
 
-
 static lua_State *globalL = NULL;
 
 static void lstop (lua_State *L, lua_Debug *ar) {
@@ -323,6 +339,7 @@ static int docall (lua_State *L, int narg, int clear) {
 static void print_welcome() {
     printf("\n"
            "Terra -- A low-level counterpart to Lua\n"
+           "Release " TERRA_VERSION_STRING "\n"
            "\n"
            "Stanford University\n"
            "zdevito@stanford.edu\n"

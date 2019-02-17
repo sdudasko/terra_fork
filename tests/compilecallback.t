@@ -1,10 +1,10 @@
 
 local a = 0
+terra bar :: {} -> int
+
 local foo = macro(function(arg)
-	bar:compile(function()
-		a = bar()
-	end)
-	a = 1
+	assert(({} -> int) == &bar:gettype())
+	a = 3
 	return 3
 end)
 

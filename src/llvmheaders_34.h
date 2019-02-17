@@ -1,4 +1,3 @@
-
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -16,6 +15,8 @@
 #include "llvm/Linker.h"
 #include "llvm/Support/system_error.h"
 #include "llvm/Support/CFG.h"
+#include "llvm/ExecutionEngine/JIT.h"
+#include "llvm/ExecutionEngine/JITMemoryManager.h"
 
 #include "clang/Rewrite/Core/Rewriter.h"
 #include "clang/Rewrite/Frontend/Rewriters.h"

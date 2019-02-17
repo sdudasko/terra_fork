@@ -6,10 +6,10 @@
 class ManualInliner {
     llvm::CallGraphSCCPass * SI;
     llvm::CallGraph * CG;
-    llvm::PassManager PM;
+    PassManager PM;
 public:
     ManualInliner(llvm::TargetMachine * tm, llvm::Module * m);
-    void run(std::vector<llvm::Function *> * fns);
+    void run(std::vector<llvm::Function *>::iterator fbegin, std::vector<llvm::Function *>::iterator fend);
     void eraseFunction(llvm::Function * f);
 };
 

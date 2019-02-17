@@ -2,22 +2,28 @@ if not terralib.cudacompile then
 	print("CUDA not enabled, not performing test...")
 	return
 end
+if os.getenv("CI") then
+	print("Running in CI environment without a GPU, not performing test...")
+	return
+end
 
 local tid = cudalib.nvvm_read_ptx_sreg_tid_x--terralib.intrinsic("llvm.nvvm.read.ptx.sreg.tid.x",{} -> int)
 
 vprintf = terralib.externfunction("cudart:vprintf", {&int8,&int8} -> int)
 local function createbuffer(args)
     local Buf = terralib.types.newstruct()
+    for i,e in ipairs(args) do
+        local typ = e:gettype()
+        local field = "_"..tonumber(i)
+        typ = typ == float and double or typ
+        table.insert(Buf.entries,{field,typ})
+    end
     return quote
         var buf : Buf
         escape
             for i,e in ipairs(args) do
-                local typ = e:gettype()
-                local field = "_"..tonumber(i)
-                typ = typ == float and double or typ
-                table.insert(Buf.entries,{field,typ})
                 emit quote
-                   buf.[field] = e
+                   buf.["_"..tonumber(i)] = e
                 end
             end
         end

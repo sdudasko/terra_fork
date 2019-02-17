@@ -18,6 +18,7 @@ typedef struct {   /* default values are 0 */
     int verbose; /*-v, print more debugging info (can be 1 for some, 2 for more) */
     int debug;   /*-g, turn on debugging symbols and base pointers */
     int usemcjit;
+    char* cmd_line_chunk;
 } terra_Options;
 int terra_initwithoptions(lua_State * L, terra_Options * options);
 
@@ -33,12 +34,10 @@ void terra_llvmshutdown();
 #define terra_dostring(L, s) \
     (terra_loadstring(L, s) || lua_pcall(L, 0, LUA_MULTRET, 0))
 
-#ifdef TERRA_LUAPOWER_BUILD
 int luaopen_terra(lua_State *L);
-#endif
 
 #if __cplusplus
 } /*extern C*/
 #endif
-    
+
 #endif

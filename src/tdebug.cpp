@@ -26,24 +26,31 @@
 
 using namespace llvm;
 
+#ifdef DEBUG_INFO_WORKING
 static bool pointisbeforeinstruction(uintptr_t point, uintptr_t inst, bool isNextInst) {
     return point < inst || (!isNextInst && point == inst);
 }
+#endif
 static bool stacktrace_findline(terra_CompilerState * C, const TerraFunctionInfo * fi, uintptr_t ip, bool isNextInstr, StringRef * file, size_t * lineno) {
+    #ifdef DEBUG_INFO_WORKING
     const std::vector<JITEvent_EmittedFunctionDetails::LineStart> & LineStarts = fi->efd.LineStarts;
-    int i;
+    size_t i;
     for(i = 0; i + 1 < LineStarts.size() && pointisbeforeinstruction(LineStarts[i + 1].Address, ip, isNextInstr); i++) {
         //printf("\nscanning for %p, %s:%d %p\n",(void*)ip,DIFile(LineStarts[i].Loc.getScope(*C->ctx)).getFilename().data(),(int)LineStarts[i].Loc.getLine(),(void*)LineStarts[i].Address);
     }
+
     if(i < LineStarts.size()) {
         if(lineno)
             *lineno = LineStarts[i].Loc.getLine();
         if(file)
-            *file = DIFile(LineStarts[i].Loc.getScope(*C->ctx)).getFilename();
+            *file = DIFile(LineStarts[i].Loc.getScope(*fi->ctx)).getFilename();
         return true;
     } else {
         return false;
     }
+    #else
+    return false;
+    #endif
 }
 
 static bool stacktrace_findsymbol(terra_CompilerState * C, uintptr_t ip, const TerraFunctionInfo ** rfi) {
@@ -81,9 +88,9 @@ static int terra_backtrace(void ** frames, int maxN, void * rip, void * rbp) {
 #endif
     //successful write to a pipe checks that we can read
     //Frame's memory. Otherwise we might segfault if rbp holds junk.
-    for(i = 1; i < maxN && 
+    for(i = 1; i < maxN &&
 #ifndef _WIN32
-		write(fds[1],frame,sizeof(Frame)) != -1 && 
+		write(fds[1],frame,sizeof(Frame)) != -1 &&
 #else
 		!IsBadReadPtr(frame, sizeof(Frame)) &&
 #endif
@@ -103,7 +110,7 @@ static void stacktrace_printsourceline(const char * filename, size_t lineno) {
     if(!file)
         return;
     int c = fgetc(file);
-    for(int i = 1; i < lineno && c != EOF;) {
+    for(size_t i = 1; i < lineno && c != EOF;) {
         if(c == '\n')
             i++;
         c = fgetc(file);
@@ -120,9 +127,8 @@ static void stacktrace_printsourceline(const char * filename, size_t lineno) {
 static bool printfunctioninfo(terra_CompilerState * C, uintptr_t ip, bool isNextInst, int i) {
     const TerraFunctionInfo * fi;
     if(stacktrace_findsymbol(C,ip,&fi)) {
-        std::string str = fi->fn->getName();
         uintptr_t fstart = (uintptr_t) fi->addr;
-        printf("%-3d %-35s 0x%016" PRIxPTR " %s + %d ",i,"terra (JIT)",ip,str.c_str(),(int)(ip - fstart));
+        printf("%-3d %-35s 0x%016" PRIxPTR " %s + %d ",i,"terra (JIT)",ip,fi->name.c_str(),(int)(ip - fstart));
         StringRef filename;
         size_t lineno;
          if(stacktrace_findline(C, fi, ip,isNextInst, &filename, &lineno)) {
@@ -153,8 +159,13 @@ static void printstacktrace(void * uap, void * data) {
         rip = (void*) uc->uc_mcontext.gregs[REG_RIP];
         rbp = (void*) uc->uc_mcontext.gregs[REG_RBP];
 #else
+#ifdef __FreeBSD__
+        rip = (void*)uc->uc_mcontext.mc_rip;
+        rbp = (void*)uc->uc_mcontext.mc_rbp;
+#else
         rip = (void*)uc->uc_mcontext->__ss.__rip;
         rbp = (void*)uc->uc_mcontext->__ss.__rbp;
+#endif
 #endif
     }
 #else
@@ -215,9 +226,8 @@ static bool terra_lookupsymbol(void * ip, SymbolInfo * r, terra_CompilerState * 
         return false;
     r->addr = fi->addr;
 	r->size = fi->size;
-	StringRef sr = fi->fn->getName();
-	r->name = sr.data();
-	r->namelength = sr.size();
+	r->name = fi->name.c_str();
+	r->namelength = fi->name.length();
 	return true;
 }
 
@@ -239,11 +249,11 @@ static bool terra_lookupline(void * fnaddr, void * ip, LineInfo * r ,terra_Compi
     return true;
 }
 
-static void * createclosure(JITMemoryManager * JMM, void * fn, int nargs, void ** env, int nenv) {
+#define CLOSURE_MAX_SIZE 64
+
+static void * createclosure(uint8_t * buf, void * fn, int nargs, void ** env, int nenv) {
     assert(nargs <= 4);
     assert(*env);
-    size_t fnsize = 2 + 10*(nenv + 1);
-    uint8_t * buf = JMM->allocateSpace(fnsize, 16);
     uint8_t * code = buf;
 #define ENCODE_MOV(reg,imm) do {  \
     *code++ = 0x48 | ((reg) >> 3);\
@@ -266,13 +276,17 @@ static void * createclosure(JITMemoryManager * JMM, void * fn, int nargs, void *
 #undef ENCODE_MOV
 }
 
-int terra_debuginit(struct terra_State * T, JITMemoryManager * JMM) {
-    lua_getfield(T->L,LUA_GLOBALSINDEX,"terra");
-    void * stacktracefn = createclosure(JMM,(void*)printstacktrace,2,(void**)&T->C,1);
-    void * lookupsymbol = createclosure(JMM,(void*)terra_lookupsymbol,3,(void**)&T->C,1);
-    void * lookupline =   createclosure(JMM,(void*)terra_lookupline,4,(void**)&T->C,1);
-    lua_getfield(T->L, -1, "initdebugfns");
+int terra_debuginit(struct terra_State * T) {
 
+    std::error_code ec;
+    T->C->MB = llvm::sys::Memory::allocateMappedMemory(CLOSURE_MAX_SIZE*3, NULL, llvm::sys::Memory::MF_READ|llvm::sys::Memory::MF_WRITE|llvm::sys::Memory::MF_EXEC, ec);
+
+    void * stacktracefn = createclosure((uint8_t*)T->C->MB.base(),(void*)printstacktrace,2,(void**)&T->C,1);
+    void * lookupsymbol = createclosure((uint8_t*)T->C->MB.base()+CLOSURE_MAX_SIZE,(void*)terra_lookupsymbol,3,(void**)&T->C,1);
+    void * lookupline =   createclosure((uint8_t*)T->C->MB.base()+2*CLOSURE_MAX_SIZE,(void*)terra_lookupline,4,(void**)&T->C,1);
+
+    lua_getfield(T->L,LUA_GLOBALSINDEX,"terra");
+    lua_getfield(T->L, -1, "initdebugfns");
     lua_pushlightuserdata(T->L, (void*)stacktracefn);
     lua_pushlightuserdata(T->L, (void*)terra_backtrace);
     lua_pushlightuserdata(T->L, (void*)lookupsymbol);
@@ -285,7 +299,7 @@ int terra_debuginit(struct terra_State * T, JITMemoryManager * JMM) {
 
 #else /* it arm code just don't include debug interface for now */
 
-int terra_debuginit(struct terra_State * T, llvm::JITMemoryManager * JMM) {
+int terra_debuginit(struct terra_State * T) {
     return 0;
 }
 

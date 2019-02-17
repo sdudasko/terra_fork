@@ -40,7 +40,7 @@ blockregisters = macro(function(C,A,B,K,lda,ldc,m,n,kk)
 		for i = 0,I-1 do
 			r[i] = {}
 			for j = 0,J-1 do
-				r[i][j] = symbol(nm..tostring(i)..tostring(j))
+				r[i][j] = symbol(vector(float,V),nm..tostring(i)..tostring(j))
 			end
 		end
 		return r
@@ -49,11 +49,11 @@ blockregisters = macro(function(C,A,B,K,lda,ldc,m,n,kk)
 	local stmts = terralib.newlist()
 	for i = 0, AR-1 do
 		for j = 0, BR-1 do
-			stmts:insert(quote var [cs[i][j]] : vector(float,V) = 0.f end)
+			stmts:insert(quote var [cs[i][j]]  = 0.f end)
 		end
 	end
 
-	local k = symbol("k")
+	local k = symbol(int,"k")
 	local kloopbody = terralib.newlist()
 
 	local alreadyloaded = {}
@@ -156,7 +156,12 @@ terra my_sgemm(gettime : {} -> double, M : int, N : int, K : int, alpha : float,
 	stdlib.free(TB)
 end
 
-my_sgemm:compile()
-my_sgemm:printpretty()
+ffi = require("ffi")
+if ffi.os ~= "Linux" or os.execute("grep avx /proc/cpuinfo") ~= "" then
+	print("ignoring (machine does not support AVX)...")
+else
+	my_sgemm:compile()
+	my_sgemm:printpretty(false)
 
-terralib.saveobj("my_sgemm.o", {my_sgemm = my_sgemm})
+	terralib.saveobj("my_sgemm.o", {my_sgemm = my_sgemm})
+end

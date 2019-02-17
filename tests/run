@@ -10,11 +10,10 @@ else
 end
 
 local function getcommand(file)
-    local prefix = terralib and terralib.terrahome and 
-                   terralib.terrahome .."/terra" or "../terra"
-    prefix = '../../../../luajit -e\'do end\' -lterra -l'
+    local prefix = terralib and terralib.terrahome and
+                   terralib.terrahome .."/bin/terra" or "../terra"
     if ffi.os == "Windows" then
-        prefix = "cmd /c " .. prefix:gsub("/","\\\\")
+        prefix = "cmd /c " .. prefix:gsub("[/\\]","\\\\")
     end
     return prefix .. file:gsub('%.t$', '')
 end
@@ -34,10 +33,12 @@ for line in io.popen(lscmd):lines() do
     local file = line:match("^([^/]*%.t)$") or line:match("^(fails/[^/]*%.t)$")
     if file and (not testfile or file == testfile) then
         print(file .. ":")
-        local execstring = getcommand(file)
-        if os.execute(execstring) == 0 then
+        local execstring = getcommand(file) .. " " .. file
+        local result = os.execute(execstring)
+        if type(result) == "number" and result == 0 or result == true then
             table.insert(passed,file)
         else
+            --error("fail")
             table.insert(failed,file)
         end
     end
@@ -59,3 +60,7 @@ end
 printtests("passing tests",passed)
 printtests("FAILING tests",failed)
 print(tostring(#passed).." tests passed. "..tostring(#failed).." tests failed.")
+
+if #failed > 0 then
+    os.exit(1)
+end

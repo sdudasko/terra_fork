@@ -10,6 +10,7 @@
 #include "tkind.h"
 #include "tcwrapper.h"
 #include "tcuda.h"
+#include "tdebug.h"
 
 #include <stdio.h>
 #include <stdarg.h>
@@ -71,7 +72,7 @@ void terra_reporterror(terra_State * T, const char * fmt, ...) {
 }
 
 terra_State * terra_getstate(lua_State * L, int upvalue) {
-    terra_State * T = (terra_State*) lua_topointer(L,lua_upvalueindex(upvalue));
+    terra_State * T = const_cast<terra_State *>((const terra_State *) lua_topointer(L,lua_upvalueindex(upvalue)));
     assert(T);
     T->L = L;
     return T;
@@ -110,7 +111,6 @@ int terra_luaload(lua_State * L) {
     } else {
         fnvalue = lua_gettop(L);
     }
-
     if(terra_load(L,reader_luaload,(void*)fnvalue,chunkname)) {
         lua_pushnil(L);
         lua_pushvalue(L,-2);
@@ -145,21 +145,21 @@ int terra_lualoadstring(lua_State * L) {
 }
 
 #ifndef TERRA_LUAPOWER_BUILD
-//defines terralib bytecodes
+//defines bytecodes for included lua source
 #include "terralib.h"
-//defines strict.lua bytecodes
 #include "strict.h"
+#include "asdl.h"
 #endif
 
-int terra_loadandrunbytecodes(lua_State * L, const char * bytecodes, size_t size, const char * name) {
-    return luaL_loadbuffer(L, bytecodes, size, name) 
+int terra_loadandrunbytecodes(lua_State * L, const unsigned char * bytecodes, size_t size, const char * name) {
+  return luaL_loadbuffer(L, (const char *)bytecodes, size, name)
            || lua_pcall(L,0,LUA_MULTRET,0);
 }
 
 #define abs_index(L, i) \
   ((i) > 0 || (i) <= LUA_REGISTRYINDEX ? (i) : lua_gettop(L) + (i) + 1)
-  
-static void ongc(lua_State * L, int idx, lua_CFunction gcfn) {
+
+void terra_ongc(lua_State * L, int idx, lua_CFunction gcfn) {
     idx = abs_index(L,idx);
     lua_newtable(L);
     lua_pushcfunction(L, gcfn);
@@ -181,7 +181,7 @@ static bool pushterrahome(lua_State * L) {
             char exe_path[PATH_MAX];
               ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path));
             if(len > 0) {
-                lua_pushstring(L, dirname(exe_path));
+                lua_pushstring(L, dirname(dirname(exe_path)));
                 return true;
             }
         }
@@ -189,7 +189,7 @@ static bool pushterrahome(lua_State * L) {
 #endif
     if (info.dli_fname) {
             char * full = realpath(info.dli_fname, NULL);
-            lua_pushstring(L, dirname(full)); //TODO: dirname not reentrant
+            lua_pushstring(L, dirname(dirname(full))); //TODO: dirname not reentrant
             free(full);
             return true;
         }
@@ -204,6 +204,7 @@ static bool pushterrahome(lua_State * L) {
     char path[MAX_PATH];
     VirtualQuery((void *)terra_init, &mbi, sizeof(mbi));
     GetModuleFileNameA((HINSTANCE)mbi.AllocationBase, path, MAX_PATH);
+    PathRemoveFileSpecA(path);
     PathRemoveFileSpecA(path);
     lua_pushstring(L, path);
     return true;
@@ -225,38 +226,44 @@ int terra_init(lua_State * L) {
 }
 int terra_initwithoptions(lua_State * L, terra_Options * options) {
     terra_State * T = (terra_State*) lua_newuserdata(L, sizeof(terra_State));
-    ongc(L, -1, terra_free);
+    terra_ongc(L, -1, terra_free);
     assert(T);
     memset(T,0,sizeof(terra_State)); //some of lua stuff expects pointers to be null on entry
     T->options = *options;
+#ifdef __arm__
+    T->options.usemcjit = true; //force MCJIT since old JIT is partially broken on ARM
+#endif
     T->numlivefunctions = 1;
     T->L = L;
     assert (T->L);
     lua_newtable(T->L);
     lua_insert(L, -2);
     lua_setfield(L, -2, "__terrastate"); //reference to our T object, so that we can load it from the lua state on other API calls
-    
+
     lua_setfield(T->L,LUA_GLOBALSINDEX,"terra"); //create global terra object
     terra_kindsinit(T); //initialize lua mapping from T_Kind to/from string
     setterrahome(T->L); //find the location of support files such as the clang resource directory
+
+    int err = terra_compilerinit(T);
+    if(err) return err;
 #ifdef TERRA_LUAPOWER_BUILD
-    int err;
-    lua_getglobal(T->L, "require");
-    lua_pushliteral(T->L, "terralib");
-    int err1 = lua_pcall(T->L, 1, 1, 0);
-    if (err1) {
-        return err1;
-    }
+    lua_getglobal(T->L, "require"); lua_pushliteral(T->L, "asdl"    ); err = lua_pcall(T->L, 1, 1, 0); if (err) { return err; }
+    lua_getglobal(T->L, "require"); lua_pushliteral(T->L, "terralib"); err = lua_pcall(T->L, 1, 1, 0); if (err) { return err; }
 #else
-    int err =    terra_loadandrunbytecodes(T->L,luaJIT_BC_strict,luaJIT_BC_strict_SIZE, "strict.lua")
-              || terra_loadandrunbytecodes(T->L,luaJIT_BC_terralib,luaJIT_BC_terralib_SIZE, "terralib.lua");
-              
-    if(err) {
-        return err;
-    }
+    err =    terra_loadandrunbytecodes(T->L,(const unsigned char*)luaJIT_BC_strict,luaJIT_BC_strict_SIZE, "strict.lua")
+          || terra_loadandrunbytecodes(T->L,(const unsigned char*)luaJIT_BC_asdl,luaJIT_BC_asdl_SIZE, "asdl.lua")
+#ifndef TERRA_EXTERNAL_TERRALIB
+          || terra_loadandrunbytecodes(T->L,(const unsigned char*)luaJIT_BC_terralib,luaJIT_BC_terralib_SIZE, "terralib.lua");
+#else
+          // make it possible to quickly iterate in terralib.lua when developing
+          || luaL_loadfile(T->L,TERRA_EXTERNAL_TERRALIB)
+          || lua_pcall(L,0,LUA_MULTRET,0);
 #endif
+    if(err) { return err; }
+#endif
+
     terra_cwrapperinit(T);
-    
+
     lua_getfield(T->L,LUA_GLOBALSINDEX,"terra");
 
     lua_pushcfunction(T->L,terra_luaload);
@@ -265,60 +272,38 @@ int terra_initwithoptions(lua_State * L, terra_Options * options) {
     lua_setfield(T->L,-2,"loadstring");
     lua_pushcfunction(T->L,terra_lualoadfile);
     lua_setfield(T->L,-2,"loadfile");
-    
+
+    lua_pushstring(T->L,TERRA_VERSION_STRING);
+    lua_setfield(T->L,-2,"version");
+
     lua_newtable(T->L);
     lua_setfield(T->L,-2,"_trees"); //to hold parser generated trees
-    
+
     lua_pushinteger(L, T->options.verbose);
     lua_setfield(L, -2, "isverbose");
     lua_pushinteger(L, T->options.debug);
     lua_setfield(L, -2, "isdebug");
-    
+#ifndef TERRA_LUAPOWER_BUILD
+    terra_registerinternalizedfiles(L,-1);
+#endif
     lua_pop(T->L,1); //'terra' global
-    
-    luaX_init(T);
-    
-    err = terra_compilerinit(T);
-    if(err) {
-        return err;
-    }
 
+    luaX_init(T);
+    terra_debuginit(T);
     err = terra_cudainit(T); /* if cuda is not enabled, this does nothing */
     if(err) {
         return err;
     }
-    return 0;   
+    return 0;
 }
 
 //Called when the lua state object is free'd during lua_close
 static int terra_free(lua_State * L) {
     terra_State * T = (terra_State *) lua_touserdata(L, -1);
     assert(T);
-    terra_decrementlivefunctions(T);
+    terra_cudafree(T);
+    terra_compilerfree(T->C);
     return 0;
-}
-
-//determines when to free terra_State
-//it is safe to free terra_State when both:
-//1. all live functions in the system have been deleted
-//2. terra_free has been called
-// due to the way lua calls finalizers, terra_free can be called
-// before the destructors for live functions. numlivefunctions
-// keeps an accurate count of the live functions + 1 if terra free
-// has not been called. when this count reaches 0 both conditions
-// 1 and 2 are met, so we can delete the state.
-// terra_decrementlivefunctions will be called by both terra_free
-// and terra_deletefunction to check for this condition
-void terra_decrementlivefunctions(terra_State * T) {
-    assert(T->numlivefunctions > 0);
-    T->numlivefunctions--;
-    if(T->numlivefunctions == 0) {
-        VERBOSE_ONLY(T) {
-            printf("freeing terra_State\n");
-        }
-        terra_cudafree(T);
-        terra_compilerfree(T);
-    }
 }
 
 struct FileInfo {
@@ -382,7 +367,7 @@ int terra_loadfile(lua_State * L, const char * file) {
     ungetc(c,ctx.fp);
     if(c == '#') { /* skip the POSIX comment */
         do {
-            c = fgetc(ctx.fp);   
+            c = fgetc(ctx.fp);
         } while(c != '\n' && c != EOF);
         if(c == '\n')
             ungetc(c,ctx.fp); /* keep line count accurate */
@@ -390,7 +375,7 @@ int terra_loadfile(lua_State * L, const char * file) {
     if(file) {
         char * name = (char *) malloc(strlen(file) + 2);
         sprintf(name,"@%s",file);
-        int r = terra_load(L,reader_file,&ctx,name);    
+        int r = terra_load(L,reader_file,&ctx,name);
         free(name);
         fclose(ctx.fp);
         return r;
@@ -414,17 +399,21 @@ namespace llvm {
     void llvm_shutdown();
 }
 
-void terra_llvmshutdown() { 
+void terra_llvmshutdown() {
     llvm::llvm_shutdown();
 }
 
-#ifdef TERRA_LUAPOWER_BUILD
-int luaopen_terra(lua_State *L) {
-    int ret = terra_init(L);
-    if (ret) {
-        return ret;
-    }
-    lua_getfield(L, LUA_GLOBALSINDEX, "terra");
-    return 1;
-} 
-#endif
+//for require
+extern "C" int luaopen_terra(lua_State * L) {
+    terra_Options options;
+    memset(&options,0, sizeof(terra_Options));
+    if(!lua_isnil(L,1))
+        options.verbose = lua_tonumber(L,1);
+    if(!lua_isnil(L,2))
+        options.debug = lua_tonumber(L,2);
+    if(!lua_isnil(L,3))
+        options.usemcjit = lua_tonumber(L,3);
+    if(terra_initwithoptions(L,&options))
+        lua_error(L);
+    return 0;
+}

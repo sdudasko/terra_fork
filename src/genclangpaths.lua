@@ -2,10 +2,11 @@
 --usage: genclangpaths.lua output /path/to/clang  [addition args to parse]
 local ffi = require("ffi")
 local outputfile,clang = unpack(arg)
-local handle = assert(io.popen(clang .. " -v src/dummy.c -o build/dummy.o 2>&1", "r"))
+local handle = assert(io.popen(clang .. " -v dummy.c -o dummy.o 2>&1", "r"))
 local theline
 for s in handle:lines() do
-    if s:find("-cc1") then
+    print(s)
+	 if s:find("-cc1") then
         theline = s
         break
     end
@@ -24,7 +25,7 @@ local flagStr
 local accumStr
 for a in theline:gmatch("([^ ]+) ?") do -- Tokenize on whitespace
     -- If this is an option, stop recording args and emit what we have
-    if a:find("^-") and accumStr then 
+    if a:find("^-") and accumStr then
         accumStr = accumStr:gsub("\\\\", "/")
                            :match("^%s*(.*%S)%s*$")
                            :match("^\"?([^\"]+)\"?$")
@@ -39,7 +40,7 @@ for a in theline:gmatch("([^ ]+) ?") do -- Tokenize on whitespace
         flagStr = a
         accumStr = ""
     -- If we are recording args, continue recording args
-    elseif accumStr then 
+    elseif accumStr then
         accumStr = accumStr .. a .. " "
     end
 end

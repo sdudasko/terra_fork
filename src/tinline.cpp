@@ -13,15 +13,21 @@ ManualInliner::ManualInliner(TargetMachine * TM, Module * m) {
     //Trick the Module-at-a-time inliner into running on a single SCC
     //First we run it on the (currently empty) module to initialize
     //the inlining pass with the Analysis passes it needs.
+    #if LLVM_VERSION <= 35
     DataLayout * TD = new DataLayout(*TM->getDataLayout());
+    #endif
     
     #if LLVM_VERSION <= 34
     PM.add(TD);
-    #else
+    #elif LLVM_VERSION <= 35
     PM.add(new DataLayoutPass(*TD));
+    #elif LLVM_VERSION <= 36
+    PM.add(new DataLayoutPass());
+    #else
+    PM.add(createTargetTransformInfoWrapperPass(TM->getTargetIRAnalysis()));
     #endif
     
-    #if LLVM_VERSION >= 33
+    #if LLVM_VERSION >= 33 && LLVM_VERSION <= 36
     TM->addAnalysisPasses(PM);
     #endif
     SI = (CallGraphSCCPass*) createFunctionInliningPass();
@@ -45,12 +51,12 @@ void ManualInliner::eraseFunction(Function * F) {
     CG->removeFunctionFromModule(n);
     delete F;
 }
-void ManualInliner::run(std::vector<Function *> * fns) {
+void ManualInliner::run(std::vector<Function *>::iterator fbegin, std::vector<Function *>::iterator fend) {
     std::vector<CallGraphNode*> nodes;
     //the inliner requires an up to date callgraph, so we add the functions in the SCC
     //to the callgraph. If needed, we can do this during function creation to make it faster
-    for(size_t i = 0; i < fns->size(); i++){
-        Function * F = (*fns)[i];
+    for(std::vector<Function *>::iterator fp = fbegin; fp != fend; ++fp){
+        Function * F = *fp;
         CallGraphNode * n = CG->getOrInsertFunction(F);
         for (Function::iterator BB = F->begin(), BBE = F->end(); BB != BBE; ++BB)
           for (BasicBlock::iterator II = BB->begin(), IE = BB->end(); II != IE; ++II) {
@@ -66,14 +72,22 @@ void ManualInliner::run(std::vector<Function *> * fns) {
         nodes.push_back(n);
     }
     //create a fake SCC node and manually run the inliner pass on it.
+#if LLVM_VERSION < 39
     CallGraphSCC SCC(NULL);
+#else
+    CallGraphSCC SCC(*CG,NULL);
+#endif
+
+#if LLVM_VERSION >= 50
+    SCC.initialize(ArrayRef<CallGraphNode *>(nodes));
+#else
     SCC.initialize(&nodes[0], &nodes[0]+nodes.size());
+#endif
     SI->runOnSCC(SCC);
     //We optimize the function now, which will invalidate the call graph,
     //removing called functions makes sure that further inlining passes don't attempt to add invalid callsites as inlining candidates
-    for(size_t i = 0; i < fns->size(); i++){
-        Function * F = (*fns)[i];
-        CG->getOrInsertFunction(F)->removeAllCalledFunctions();
+    for(std::vector<Function *>::iterator fp = fbegin; fp != fend; ++fp){
+        CG->getOrInsertFunction(*fp)->removeAllCalledFunctions();
     }
 
 }

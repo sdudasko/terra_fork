@@ -6,6 +6,16 @@ function terralib.cudacompile(...)
     return cudalib.compile(...)
 end
 
+local ffi = require('ffi')
+
+local cudaruntimelinked = false
+function cudalib.linkruntime(cudahome)
+    if cudaruntimelinked then return end
+    terralib.linklibrary(terralib.cudalibpaths.driver)
+    terralib.linklibrary(terralib.cudalibpaths.runtime)
+    cudaruntimelinked = true
+end
+
 terralib.CUDAParams = terralib.types.newstruct("CUDAParams")
 terralib.CUDAParams.entries = { { "gridDimX", uint },
                                 { "gridDimY", uint },
@@ -18,36 +28,23 @@ terralib.CUDAParams.entries = { { "gridDimX", uint },
                                 
 function cudalib.toptx(module,dumpmodule,version)
     dumpmodule,version = not not dumpmodule,assert(tonumber(version))
-
-    local llvmglobals = {} -- map name -> terra object with llvm_value that goes in the cuda kernel (function, var, constant)
+    local cu = terralib.newcompilationunit(terra.cudatarget, false) -- TODO: add nvptx target options here
     local annotations = terra.newlist{} -- list of annotations { functionname, annotationname, annotationvalue } to be tagged
-    local kernelindex = {}
-
-    local function addkernel(k,v)
-        kernelindex[k] = v
-        local definitions =  v:getdefinitions()
-        if #definitions > 1 then
-            error("cuda kernels cannot be polymorphic, but found polymorphic function "..k)
-        end
-        local fn = definitions[1]
-        if fn.state == "untyped" then 
-            fn:setinlined(true) --if we need to wrap this function, make sure it is inlined
-        end
+    local function addkernel(k,fn)
+        fn:setinlined(true)
         
         local typ = fn:gettype()
-        
         if not typ.returntype:isunit() then
             error(k..": kernels must return no arguments.")
         end
 
         for _,p in ipairs(typ.parameters) do
             if p:isarray() or p:isstruct() then -- we can't pass aggregates by value through CUDA, so wrap/unwrap the kernel
-                fn = cudalib.flattenkernel(v):getdefinitions()[1]
+                fn = cudalib.flattenkernel(fn)
                 break
             end
         end
-        fn:emitllvm()
-        llvmglobals[k] = fn
+        cu:addvalue(k,fn)
         annotations:insert({k,"kernel",1})
     end
     
@@ -70,16 +67,42 @@ function cudalib.toptx(module,dumpmodule,version)
                 v = v.global
             end
             if terralib.isglobalvar(v) then
-                v:getpointer() -- ensure llvm_value exists for compiler
-                llvmglobals[k] = v
+                cu:addvalue(k,v)
             else
                 error("module must contain only terra functions, globals, or cuda constants")
             end
         end
     end
+
+    -- Find libdevice module
+    local libdevice
+    local libdevice_version
+    local dir = terra.cudahome..(ffi.os == 'Windows' and '\\nvvm\\libdevice' or '/nvvm/libdevice')
+    local cmd = ffi.os == 'Windows' and 'dir "'..dir..'" /b' or 'ls "'..dir..'"'
+    local pfile = io.popen(cmd)
+    for fname in pfile:lines() do
+        if fname:match('^libdevice%.10%.bc$') then
+            libdevice = dir..(ffi.os == 'Windows' and '\\' or '/')..fname
+            break
+        end
+        local x, y = fname:match('^libdevice%.compute_([0-9])([0-9])%.10%.bc$')
+        if x and y then
+            local v = 10 * x + y
+            if v <= version and (not libdevice or v > libdevice_version) then
+                libdevice = dir..(ffi.os == 'Windows' and '\\' or '/')..fname
+                libdevice_version = v
+            end
+        end
+    end
+    pfile:close()
+
     --call into tcuda.cpp to perform compilation
-    return terralib.toptximpl(llvmglobals,annotations,dumpmodule,version)
+    local r = terralib.toptximpl(cu,annotations,dumpmodule,version,libdevice)
+    cu:free()
+    return r
 end
+
+cudalib.useculink = false
 
 -- we need to use terra to write the function that JITs the right wrapper functions forCUDA kernels
 -- since this file is loaded as Lua, we use terra.loadstring to inject some terra code
@@ -120,6 +143,8 @@ local C = {
     cuModuleGetFunction = ef("cuModuleGetFunction",{&&CUfunc_st,&CUmod_st,&int8} -> uint32);
     cuModuleGetGlobal_v2 = ef("cuModuleGetGlobal_v2",{&uint64,&uint64,&CUmod_st,&int8} -> uint32);
     cuModuleLoadData = ef("cuModuleLoadData",{&&CUmod_st,&opaque} -> uint32);
+    cuFuncGetAttribute = ef("cuFuncGetAttribute", {&int,int,&CUfunc_st} -> uint32);
+    cuGetErrorString = ef("cuGetErrorString", {uint32,&rawstring} -> uint32);
     exit = ef("exit",{int32} -> {});
     printf = ef("printf",terralib.types.funcpointer(&int8,int32,true));
     snprintf = ef(snprintf,terralib.types.funcpointer({&int8,uint64,&int8},int32,true));
@@ -189,7 +214,9 @@ local cd = macro(function(nm,...)
             if error_str ~= nil then
                 var start = C.strlen(error_str)
                 if error_sz - start > 0 then
-                    C.snprintf(error_str+start,error_sz - start,"%s: cuda reported error %d",nm,r)
+                    var s : rawstring
+                    C.cuGetErrorString(r, &s)
+                    C.snprintf(error_str+start,error_sz - start,"%s: cuda reported error %d: %s",nm,r,s)
                 end
             end
             return r
@@ -217,6 +244,7 @@ end
 local error_buf_sz = 2048
 local error_buf = terralib.new(int8[error_buf_sz])
 function cudalib.localversion()
+    cudalib.linkruntime()
     local S = terralib.new(tuple(C.CUcontext[1],C.CUdevice[1],uint64[1]))
     if initcuda(S._0,S._1,S._2,error_buf,error_buf_sz) ~= 0 then
         error(ffi.string(error_buf))
@@ -227,12 +255,13 @@ end
 local return1 = macro(function(x)
     return quote
         var r = x;
-        if x ~= 0 then return x end
+        if r ~= 0 then return r end
     end
 end)
 
+
 local terra loadmodule(cudaM : &C.CUmodule, ptx : rawstring, ptx_sz : uint64,
-                       linker : {C.CUlinkState,rawstring,uint64} -> int,
+                       useculink : bool, linker : {C.CUlinkState,rawstring,uint64} -> int,
                        module : {&opaque,uint64} -> {},
                        [error_str],[error_sz])
     if error_sz > 0 then error_str[0] = 0 end
@@ -242,7 +271,7 @@ local terra loadmodule(cudaM : &C.CUmodule, ptx : rawstring, ptx_sz : uint64,
     
     return1(initcuda(&CX,&D,&version,error_str,error_sz))
     
-    if linker ~= nil then
+    if useculink or linker ~= nil then
         var linkState : C.CUlinkState
         var cubin : &opaque
         var cubinSize : uint64
@@ -254,9 +283,10 @@ local terra loadmodule(cudaM : &C.CUmodule, ptx : rawstring, ptx_sz : uint64,
         cd("cuLinkCreate_v2",terralib.select(error_str == nil,1,3),options,option_values,&linkState)
         cd("cuLinkAddData_v2",linkState,C.CU_JIT_INPUT_PTX,ptx,ptx_sz,nil,0,nil,nil)
 
-    
-        return1(linker(linkState,error_str,error_sz))
-
+        if linker ~= nil then
+            return1(linker(linkState,error_str,error_sz))
+        end
+        
         cd("cuLinkComplete",linkState,&cubin,&cubinSize)
 
         if module ~= nil then
@@ -272,12 +302,13 @@ end
 function cudalib.wrapptx(module,ptx)
     local ptxc = terralib.constant(ptx)
     local m = {}
+    local fnhandles = {}
     local terra loader(linker : {C.CUlinkState,rawstring,uint64} -> int,
                        module_fn : {&opaque,uint64} -> {},
                        [error_str],[error_sz])
         if error_sz > 0 then error_str[0] = 0 end
         var cudaM : C.CUmodule
-        return1(loadmodule(&cudaM,ptxc,[ptx:len() + 1],linker,module_fn,error_str,error_sz))
+        return1(loadmodule(&cudaM,ptxc,[ptx:len() + 1],cudalib.useculink,linker,module_fn,error_str,error_sz))
         escape
             for k,v in pairs(module) do
                 
@@ -285,13 +316,14 @@ function cudalib.wrapptx(module,ptx)
                     v = v.kernel
                 end
                 if terralib.isfunction(v) then
-                    local gbl = global(terralib.constant(C.CUfunction,nil))
+                    local gbl = global(`C.CUfunction(nil))
+                    fnhandles[k] = gbl
                     m[k] = makekernelwrapper(v:gettype(),k,gbl)
                     emit quote
                         cd("cuModuleGetFunction",[&C.CUfunction](&gbl),cudaM,k)
                     end
                 elseif cudalib.isconstant(v) or terralib.isglobalvar(v) then
-                    local gbl = global(terralib.constant(&opaque,nil))
+                    local gbl = global(`[&opaque](nil))
                     m[k] = gbl
                     emit quote
                         var bytes : uint64
@@ -304,7 +336,7 @@ function cudalib.wrapptx(module,ptx)
         end
         return 0
     end
-    return m,loader
+    return m,loader,fnhandles
 end
 
 local function dumpsass(data,sz)
@@ -321,17 +353,18 @@ function cudalib.compile(module,dumpmodule,version,jitload)
     version = version or cudalib.localversion()
     if jitload == nil then jitload = true end
     local ptx = cudalib.toptx(module,dumpmodule,version)
-    local m,loader = cudalib.wrapptx(module,ptx,dumpmodule)
+    local m,loader,fnhandles = cudalib.wrapptx(module,ptx,dumpmodule)
     if jitload then
+        cudalib.linkruntime()
         if 0 ~= loader(nil,dumpmodule and dumpsass or nil,error_buf,error_buf_sz) then
             error(ffi.string(error_buf),2)
         end
     end
-    return m,loader
+    return m,loader,fnhandles
 end
 
 function cudalib.sharedmemory(typ,N)
-    local gv = terralib.global(typ[N],nil,N == 0,3)
+    local gv = terralib.global(typ[N],nil,nil,N == 0,false,3)
     return `[&typ](cudalib.nvvm_ptr_shared_to_gen_p0i8_p3i8([terralib.types.pointer(typ,3)](&gv[0])))
 end
 local constant = {
@@ -343,7 +376,7 @@ function cudalib.isconstant(c)
     return getmetatable(c) == constant
 end
 function cudalib.constantmemory(typ,N)
-    local c = { type = typ, global = terralib.global(typ[N],nil,false,4) }
+    local c = { type = typ, global = terralib.global(typ[N],nil,nil,false,false,4) }
     return setmetatable(c,constant)
 end
 ]]
