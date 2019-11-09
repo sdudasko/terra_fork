@@ -1,7 +1,6 @@
 /* See Copyright Notice in ../LICENSE.txt */
 
 #include "treadnumber.h"
-
 #include "lj_strscan.h"
 
 int treadnumber(const char* buf, ReadNumber* result, int cstylesuffixes) {

@@ -3,7 +3,7 @@
 #include "terrastate.h"
 #include "tcompilerstate.h"
 
-#if !defined(__arm__) && !defined(__aarch64__)
+#if !defined(__arm__) && (!defined(__MINGW32__) || defined(__MINGW64__)) && (!defined(_WIN32) || defined(_WIN64)) && (!defined(__GNUC__) || defined(__x86_64__))
 
 #ifndef _WIN32
 #include <execinfo.h>
@@ -13,10 +13,16 @@
 #include <ucontext.h>
 #include <unistd.h>
 #else
+#ifndef __MINGW32__
 #define NOMINMAX
+#endif
 #include <Windows.h>
 #include <imagehlp.h>
 #include <intrin.h>
+#endif
+
+#if defined(__GNUC__) /* wrap msvc intrinsics onto gcc builtins */
+#define _ReturnAddress()        __builtin_return_address(0)
 #endif
 
 using namespace llvm;

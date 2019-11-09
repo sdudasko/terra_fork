@@ -1,11 +1,12 @@
-#!../terra
+#!/usr/bin/env ../../../../luajit -lterra
+local testfile=...
 local ffi = require("ffi")
 
 local skip = { }
 local lscmd
 if ffi.os == "Windows" then
     lscmd = "cmd /c dir /b /s"
-    
+
     -- Disabled due to non-deterministic failures on certain branches: https://github.com/zdevito/terra/issues/404
     table.insert(skip, "leaktest.t")
 else
@@ -13,12 +14,12 @@ else
 end
 
 local function getcommand(file)
-    local prefix = terralib and terralib.terrahome and 
+    local prefix = terralib and terralib.terrahome and
                    terralib.terrahome .."/bin/terra" or "../terra"
     if ffi.os == "Windows" then
         prefix = "cmd /c \"" .. prefix:gsub("[/\\]","\\\\") .. "\""
     end
-    return prefix
+    return prefix .. file:gsub('%.t$', '')
 end
 
 
@@ -35,22 +36,15 @@ for line in io.popen(lscmd):lines() do
         io.close()
     end
     local file = line:match("^([^/]*%.t)$") or line:match("^(fails/[^/]*%.t)$")
-    if file then
-        local run = true
-        for _, s in ipairs(skip) do
-            run = run and (s ~= file)
-        end
-        
-        if run then
-            print(file .. ":")
-            local execstring = getcommand(file) .. " " .. file
-            local result = os.execute(execstring)
-            if type(result) == "number" and result == 0 or result == true then
-                table.insert(passed,file)
-            else
-                --error("fail")
-                table.insert(failed,file)
-            end
+    if file and (not testfile or file == testfile) then
+        print(file .. ":")
+        local execstring = getcommand(file) .. " " .. file
+        local result = os.execute(execstring)
+        if type(result) == "number" and result == 0 or result == true then
+            table.insert(passed,file)
+        else
+            --error("fail")
+            table.insert(failed,file)
         end
     end
 end

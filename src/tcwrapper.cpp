@@ -1093,7 +1093,7 @@ int include_c(lua_State *L) {
         args.push_back(TT->Features.c_str());
     }
 
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(__MINGW32__)
     args.push_back("-fms-extensions");
     args.push_back("-fms-volatile");
     args.push_back("-fms-compatibility");

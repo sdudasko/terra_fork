@@ -31,6 +31,8 @@ void terra_llvmshutdown();
 
 #define terra_dostring(L, s) (terra_loadstring(L, s) || lua_pcall(L, 0, LUA_MULTRET, 0))
 
+int luaopen_terra(lua_State *L);
+
 #if __cplusplus
 } /*extern C*/
 #endif
