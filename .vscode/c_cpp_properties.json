@@ -1,0 +1,25 @@
+{
+    "configurations": [
+        {
+            "name": "Mingw64",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "x:/luapower/csrc/terra/terra/src",
+                "x:/luapower/csrc/lua-headers",
+                "x:/luapower/csrc/llvm/install.mingw64/include"
+            ],
+            "defines": [
+                "TERRA_LLVM_HEADERS_HAVE_NDEBUG",
+                "TERRA_VERSION_STRING=\"1.0.0b\"",
+                "LLVM_VERSION=60",
+                "_GNU_SOURCE"
+            ],
+            "windowsSdkVersion": "10.0.18362.0",
+            "compilerPath": "X:/tools/mingw64/bin/g++.exe",
+            "cStandard": "c11",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "gcc-x64"
+        }
+    ],
+    "version": 4
+}
