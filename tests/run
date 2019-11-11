@@ -1,4 +1,4 @@
-#!/usr/bin/env ../../../../luajit -lterra
+#!../../../../luajit -lterra
 local testfile=...
 local ffi = require("ffi")
 
@@ -14,12 +14,11 @@ else
 end
 
 local function getcommand(file)
-    local prefix = terralib and terralib.terrahome and
-                   terralib.terrahome .."/bin/terra" or [[..\..\..\..\luajit]]
+    local prefix = "../../../../luajit "
     if ffi.os == "Windows" then
         prefix = "cmd /c \"" .. prefix:gsub("[/\\]","\\\\") .. "\""
     end
-    return prefix .. file:gsub('%.t$', '')
+    return prefix .. file
 end
 
 

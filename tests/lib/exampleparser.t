@@ -1,4 +1,4 @@
-local Parse = require "terra_parsing"
+local Parse = require "terra.parsing"
 
 local Tree = {}
 Tree.__index = Tree
@@ -19,7 +19,7 @@ function Tree:copy(nt)
     return setmetatable(nt,Tree)
 end
 function Tree:anchor(kind,nt)
-    nt.filename,nt.linenumber,nt.offset = self.filename,self.linenumber,self.offset 
+    nt.filename,nt.linenumber,nt.offset = self.filename,self.linenumber,self.offset
     nt.kind = kind
     return setmetatable(nt,Tree)
 end
@@ -39,7 +39,7 @@ local function unary(P)
 	n.op = P:next().type
 	n.exp = P:exp(unary_prec)
 	return n
-end	
+end
 
 local function literal(P,value)
     local n = Tree:new(P,"literal")

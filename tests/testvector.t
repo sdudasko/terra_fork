@@ -1,5 +1,5 @@
 
-local S = require "terra_std"
+local S = require "terra.std"
 
 local floatv = S.Vector(int)
 terra foo()
@@ -40,7 +40,7 @@ struct A (S.Object) {
     a : int
 }
 
-terra A:__destruct() 
+terra A:__destruct()
     g = g + self.a
 end
 

@@ -7,7 +7,7 @@ The eg language is a toy example language that looks pretty similar to Terra/Lua
 but only contains a few constructs.
 
    def foo(a : eg.numbertype) : eg.number  --'def' starts a definition, param/return types must be annotated
-                                           --they must always be eg.number 
+                                           --they must always be eg.number
        var b = 4*a + 3 --simple expressions and varible definitions, variables must always have definitions
 	   b = b + 1 -- assignments
 	   if b < 0 then --simple if statements, 'else' is optional, there is not elseif.
@@ -18,7 +18,7 @@ but only contains a few constructs.
 	   return b*b --simple return statements
    end
 
-To show you how to use all language embedding features, 
+To show you how to use all language embedding features,
 we also allow a local variable form:
 
    local def foo(a : eg.numbertype) : eg.numbertype return 4 end
@@ -69,7 +69,7 @@ local langdefinition = {
 -- this is the equivalent of Terra's 'terralib'
 eg = {}
 
---A basic type object. 
+--A basic type object.
 eg.type = {}
 eg.type.__index = eg.type
 function eg.type:__tostring() return self.kind end
@@ -78,7 +78,7 @@ function eg.istype(a)
 	return getmetatable(a) == eg.type
 end
 
---There are only two types in our language. 
+--There are only two types in our language.
 
 --a number type representing a double:
 eg.number = setmetatable({kind = "number"},eg.type)
@@ -95,10 +95,10 @@ local tree = {}
 tree.__index = tree
 
 
---We will treat trees as immutable in our compiler. 
+--We will treat trees as immutable in our compiler.
 --This is normally a good idea, since it is often not safe to mutate trees.
 --For instance, the parser will run once for a statement, creating an untyped AST.
---If that statement was nested in some loop, then that AST can be re-used 
+--If that statement was nested in some loop, then that AST can be re-used
 --many times, and should not be mutated during type checking or compilation.
 
 --Here we create a helper function to create a new tree using this tree as a _template_
@@ -144,7 +144,7 @@ end
 -- Parsing ---------------------------------------------------------------------------
 
 
---parsedef is our entrypoint into the parser for eg functions. 
+--parsedef is our entrypoint into the parser for eg functions.
 --It will take the 'lex' object passed
 --into the language extension and parse a definition.
 --It starts parsing starting with the '(' of the argument list. The functions
@@ -152,7 +152,7 @@ end
 --depending on how the 'def' begins
 local parsedef
 
---createdef is called when a 'def' function is instanciated (when the expression is actually 
+--createdef is called when a 'def' function is instanciated (when the expression is actually
 --evaluated in Lua code). This can happen multiple times for each parsed tree.
 --It will take the 'untypedtree' from parsing, combined with the local Lua environment (mapping from name -> Lua value).
 local createdef
@@ -161,7 +161,7 @@ local createdef
 function expression(lex)
 	lex:expect("def") --they always start with 'def'
 	local untypedtree = parsedef(lex) --followed by the argument list and body, handled by parsedef
-	
+
 	--we must return a 'constructor' function that is called whenever this expresion is evaluated
 	--this function will combine the parsed tree with the local Lua environment when it is evaluated.
 	return function(env)
@@ -171,7 +171,7 @@ function expression(lex)
 	end
 end
 
---entrypoint for 'def' statements, if 'islocal' is 'true' then this 
+--entrypoint for 'def' statements, if 'islocal' is 'true' then this
 --statement started with the 'local' keyword
 function statement(lex,islocal)
 	lex:expect("def")
@@ -194,7 +194,7 @@ end
 
 
 --We will use top-down precedence parsing, see lib/parsing.t for more information
-local Parser = require("terra_parsing")
+local Parser = require("terra.parsing")
 
 --A parser in our parsing library is defined by a table of different non-terminals (e.g. lang.expression, lang.statement, etc.)
 local lang = {}
@@ -347,7 +347,7 @@ lang.expression:infix("(",10,function(P,lhs)
 	return tree
 end)
 
---this function defines what to do for any left-associated 
+--this function defines what to do for any left-associated
 --binary infix operator (a + b, c*d, etc.)
 local function doleftbinary(P,lhs)
 	local tree = newtree(P,"operator")
@@ -382,13 +382,13 @@ local compile -- takes the typedtree and produces a Terra function that implemen
 
 --define our constructor function
 function createdef(untypedtree,env)
-	
+
 	--first typecheck the function (this will error out if it is not correct)
 	local typedcode = typecheck(untypedtree,env)
 
 	--then compile the typed code into a Terra function
 	local egfn		= compile(typedcode)
-	
+
 	--finally create the wrapper eg function object for this 'def'
 	return newegfunction(typedcode,egfn)
 end
@@ -397,7 +397,7 @@ end
 -- Typechecking ---------------------------------------------------------------------------------
 
 function typecheck(untypedtree,luaenv)
-	
+
 	local checkexp --check an expression tree, and return a tree with the tree.type field set to a valid eg type
 	local checkstmt --check/return a single statment
 	local checkstmts --check and return a list of statements
@@ -405,7 +405,7 @@ function typecheck(untypedtree,luaenv)
 	                  --we will set tree.lvalue = true for any expression that can appear on the lhs of an assignment
 	local createvaluefromlua --convert a raw Lua value into a value in the eg language
 	                         --we will use this when looking up symbols from the Lua environment
-	
+
 	--the return type, it is always a number
 	local therettype = eg.number
 
@@ -418,11 +418,11 @@ function typecheck(untypedtree,luaenv)
 	local env = terralib.newenvironment(luaenv)
 
 
-	--terralib.newdiagnostics creates a helper object for reporting errors. 
+	--terralib.newdiagnostics creates a helper object for reporting errors.
 	--its method diag:reporterror(tree,msg) has an argument 'tree' which should have the location information: tree.filename, tree.offset, and tree.linenumber.
 	--these will be used to report an error and the place where it occured.
 	local diag = terralib.newdiagnostics()
-	
+
 
 	--parse a list of statments, each list of statements starts its own scope,
 	--so we push/pop the environment table
@@ -506,7 +506,7 @@ function typecheck(untypedtree,luaenv)
 		if "defvar" == k then
 			local exp = checkexp(s.expression)
 			env:localenv()[s.name] = exp.type --map this variable to its type in the local environment
-			return s:copy { expression = exp } 
+			return s:copy { expression = exp }
 		elseif "return" == k then
 			local exp = expecttype(therettype,checkexp(s.expression))
 			return s:copy { expression = exp }
@@ -521,7 +521,7 @@ function typecheck(untypedtree,luaenv)
 			return s:copy { condition = cond, thenB = thenB, elseB = elseB }
 		end
 	end
-	
+
 	function checklvalue(e)
 		local exp = checkexp(e)
 		--check if e.lvalue is set, if no this is a problem
@@ -536,7 +536,7 @@ function typecheck(untypedtree,luaenv)
 	--like environments, diagnostics are scoped, so we begin a new diagnostic scope here
 	--and enter the block for the entire function
 	env:enterblock()
-	
+
 	--evaluate the argument/return types. These were parsed Lua expressions and returned as Lua functions
 	--We can evaluate them by passing the local lua envronment as an argument:
 	local argtype = untypedtree.argtype(env:luaenv())
@@ -615,9 +615,9 @@ function compile(typedcode)
 			--create a Terra symbol to represent this variable
 			--we pass its type and a name in as arguments to make debugging the result easier
 			--but it would be optional in this case
-			local sym = symbol(gettype(s.expression.type),s.name) 
+			local sym = symbol(gettype(s.expression.type),s.name)
 			env:localenv()[s.name] = sym --put this symbol in the local environment
-			return quote var [sym] = exp end 
+			return quote var [sym] = exp end
 		elseif "return" == k then
 			local exp = emitexp(s.expression)
 			return quote return exp end
