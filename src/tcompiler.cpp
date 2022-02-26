@@ -389,6 +389,10 @@ int terra_inittarget(lua_State *L) {
     TT->external = new Module("external", *TT->ctx);
     TT->external->setTargetTriple(TT->Triple);
     lua_pushlightuserdata(L, TT);
+
+    // inserted code begins here
+    if(TT->CPU == "generic")    
+        TT->CPU = "x86-64";
     return 1;
 }
 
